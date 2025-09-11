@@ -120,8 +120,8 @@ class VideoFormatConverter:
         bit_rate,
         audio_channels,
         sample_rate,
-        extract_original_audio,  # <-- NEW PARAMETER
-        generate_silent_audio,  # <-- NEW PARAMETER
+        extract_original_audio,
+        generate_silent_audio,
         output_path,
     ):
         if not video_path or not os.path.exists(video_path):
@@ -131,16 +131,16 @@ class VideoFormatConverter:
             return ("Output disabled", {}, None, None)
 
         if not output_path:
-            raise ValueError("Output path is required for headless operation.")
+            # Use ComfyUI's default output directory if not specified
+            from folder_paths import get_output_directory
+
+            output_path = get_output_directory()
 
         if not output_filename:
             raise ValueError("Output filename is required.")
 
         video_path = video_path.replace("\\", "/")
         output_path = output_path.replace("\\", "/")
-
-        if not output_path.endswith("/"):
-            output_path += "/"
 
         os.makedirs(output_path, exist_ok=True)
 
@@ -206,7 +206,6 @@ class VideoFormatConverter:
             print(f"FFmpeg command: {' '.join(cmd)}")
             raise RuntimeError(f"FFmpeg error during video conversion: {result.stderr}")
 
-        # --- NEW LOGIC FOR ORIGINAL AUDIO EXTRACTION ---
         original_audio_output_path = None
         if extract_original_audio == "enable":
             base_name, _ = os.path.splitext(output_full_path)
@@ -229,36 +228,7 @@ class VideoFormatConverter:
                 )
                 original_audio_output_path = None
 
-        # --- NEW LOGIC FOR SILENT AUDIO ---
-        silent_audio_output_path = None
-        if generate_silent_audio == "enable":
-            base_name, _ = os.path.splitext(output_full_path)
-            silent_audio_output_path = f"{base_name}_silent.wav"
-            print(
-                f"Generating silent audio of duration {source_duration}s to {silent_audio_output_path}"
-            )
-            silent_cmd = [
-                "ffmpeg",
-                "-f",
-                "lavfi",
-                "-i",
-                f"anullsrc=r={sample_rate}:cl={'stereo' if audio_channels == 'stereo' else 'mono'}",
-                "-t",
-                str(source_duration),
-                "-q:a",
-                "0",
-                "-y",
-                silent_audio_output_path,
-            ]
-            silent_result = subprocess.run(
-                silent_cmd, capture_output=True, text=True, check=False
-            )
-            if silent_result.returncode != 0:
-                print(
-                    f"Warning: FFmpeg failed to generate silent audio: {silent_result.stderr}"
-                )
-                silent_audio_output_path = None
-
+        # --- THIS BLOCK IS NOW AFTER THE CONVERSION AND MEASUREMENT ---
         video_cap = cv2.VideoCapture(output_full_path)
         loaded_fps = video_cap.get(cv2.CAP_PROP_FPS)
         loaded_width = int(video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -278,6 +248,36 @@ class VideoFormatConverter:
             "loaded_height": loaded_height,
         }
         video_cap.release()
+
+        # --- FIX: GENERATE SILENT AUDIO USING THE *CORRECT* DURATION ---
+        silent_audio_output_path = None
+        if generate_silent_audio == "enable":
+            base_name, _ = os.path.splitext(output_full_path)
+            silent_audio_output_path = f"{base_name}_silent.wav"
+            print(
+                f"Generating silent audio of duration {loaded_duration}s to {silent_audio_output_path}"
+            )
+            silent_cmd = [
+                "ffmpeg",
+                "-f",
+                "lavfi",
+                "-i",
+                f"anullsrc=r={sample_rate}:cl={'stereo' if audio_channels == 'stereo' else 'mono'}",
+                "-t",
+                str(loaded_duration),  # <-- THE FIX IS HERE
+                "-q:a",
+                "0",
+                "-y",
+                silent_audio_output_path,
+            ]
+            silent_result = subprocess.run(
+                silent_cmd, capture_output=True, text=True, check=False
+            )
+            if silent_result.returncode != 0:
+                print(
+                    f"Warning: FFmpeg failed to generate silent audio: {silent_result.stderr}"
+                )
+                silent_audio_output_path = None
 
         return (
             output_full_path,
